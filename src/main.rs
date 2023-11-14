@@ -5,6 +5,7 @@ use bollard::image::{CreateImageOptions, RemoveImageOptions};
 use bollard::Docker;
 
 use anyhow::{Context, Result};
+use clap::{ArgAction, Parser};
 use futures_util::stream::StreamExt;
 use regex::Regex;
 use serde_json::json;
@@ -19,13 +20,36 @@ use rfs::store::{self, Router};
 
 use uuid::Uuid;
 
+#[derive(Parser, Debug)]
+#[clap(name ="docker2fl", author, version = env!("GIT_VERSION"), about, long_about = None)]
+struct Options {
+    /// enable debugging logs
+    #[clap(long, action=ArgAction::Count)]
+    debug: u8,
+
+    /// name of the docker image to be converted to flist
+    #[clap(short, long)]
+    image_name: String,
+
+    /// store url for rfs in the format [xx-xx=]<url>. the range xx-xx is optional and used for
+    /// sharding. the URL is per store type, please check docs for more information
+    #[clap(short, long, action=ArgAction::Append)]
+    store: Vec<String>,
+
+    /// docker directory to implement all docker work in it (exporting docker image and extracting it).
+    /// this directory is used as the rfs target directory to upload
+    #[clap(short, long)]
+    docker_directory: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let debug = 1;
+    let opts = Options::parse();
+
     simple_logger::SimpleLogger::new()
         .with_utc_timestamps()
         .with_level({
-            match debug {
+            match opts.debug {
                 0 => log::LevelFilter::Info,
                 1 => log::LevelFilter::Debug,
                 _ => log::LevelFilter::Trace,
@@ -34,20 +58,9 @@ async fn main() -> Result<()> {
         .with_module_level("sqlx", log::Level::Error.to_level_filter())
         .init()?;
 
-    log::debug!("Start!");
-    let image_name = String::from("redis");
-    let store_url = vec!["dir:///tmp/store0".to_string()];
-    let docker_directory = String::from("docker_temp");
-
-    let converter = DockerConverter::new(store_url, docker_directory, image_name);
+    let converter = DockerConverter::new(opts.store, opts.docker_directory, opts.image_name);
     converter.convert().await?;
     Ok(())
-
-    // let rt = tokio::runtime::Runtime::new()?;
-    // rt.block_on(async move {
-    //   converter.convert().await?;
-    //   Ok(())
-    // })
 }
 
 #[derive(Debug)]
@@ -72,26 +85,28 @@ impl DockerConverter {
         log::debug!("directory name: {}", self.docker_directory);
         log::debug!("flist name: {}.fl", self.image_name);
 
-        // #[cfg(unix)]
-        // let docker = Docker::connect_with_socket_defaults().context("failed to create docker")?;
+        #[cfg(unix)]
+        let docker = Docker::connect_with_socket_defaults().context("failed to create docker")?;
 
-        // let mut docker_image = self.image_name.to_string();
-        // if !docker_image.contains(':') {
-        //   docker_image.push_str(":latest");
-        // }
+        let mut docker_image = self.image_name.to_string();
+        if !docker_image.contains(':') {
+            docker_image.push_str(":latest");
+        }
 
-        // let container_name = Uuid::new_v4().to_string();
-        // log::debug!("Starting temporary container {}", &container_name);
+        let container_name = Uuid::new_v4().to_string();
+        log::debug!("Starting temporary container {}", &container_name);
 
-        // self.extract_image(&docker, &docker_image, &container_name).await
-        // .context("failed to extract docker image to a directory")?;
+        self.extract_image(&docker, &docker_image, &container_name)
+            .await
+            .context("failed to extract docker image to a directory")?;
 
         self.convert_to_fl()
             .await
             .context("failed to convert docker image to flist")?;
 
-        // self.clean(&docker, &docker_image, &container_name).await
-        // .context("failed to clean docker image and container")?;
+        self.clean(&docker, &docker_image, &container_name)
+            .await
+            .context("failed to clean docker image and container")?;
 
         Ok(())
     }
@@ -105,7 +120,7 @@ impl DockerConverter {
             .context("failed to parse store urls")?;
         let meta = fungi::Writer::new(format!("{}.fl", self.image_name))
             .await
-            .context("failed to format flist metdata")?;
+            .context("failed to format flist metadata")?;
         rfs::pack(meta, store, target, true)
             .await
             .context("failed to pack flist")?;
@@ -113,12 +128,11 @@ impl DockerConverter {
         Ok(())
     }
 
-    // TODO: from string to str
     async fn extract_image(
         &self,
         docker: &Docker,
-        docker_image: &String,
-        container_name: &String,
+        docker_image: &str,
+        container_name: &str,
     ) -> Result<()> {
         self.pull_image(docker, docker_image).await?;
         self.export_container(docker, docker_image, container_name)
@@ -129,8 +143,8 @@ impl DockerConverter {
     async fn container_boot(
         &self,
         docker: &Docker,
-        container_name: &String,
-        docker_tmp_dir: &String,
+        container_name: &str,
+        docker_tmp_dir: &str,
     ) -> Result<()> {
         log::debug!("Inspecting docker container {}", &container_name);
 
@@ -139,7 +153,7 @@ impl DockerConverter {
         let container = docker
             .inspect_container(container_name, options)
             .await
-            .context("failed to inpect docker container")?;
+            .context("failed to inspect docker container")?;
         let container_config = container
             .config
             .context("failed to get docker container configs")?;
@@ -204,15 +218,15 @@ impl DockerConverter {
     async fn export_container(
         &self,
         docker: &Docker,
-        docker_image: &String,
-        container_name: &String,
+        docker_image: &str,
+        container_name: &str,
     ) -> Result<()> {
         log::debug!("Inspecting docker image {}", &docker_image);
 
         let image = docker
             .inspect_image(docker_image)
             .await
-            .context("failed to inpect docker image")?;
+            .context("failed to inspect docker image")?;
         let image_config = image.config.context("failed to get docker image configs")?;
 
         let mut command = String::new();
@@ -221,13 +235,13 @@ impl DockerConverter {
         }
 
         let options = Some(CreateContainerOptions {
-            name: container_name.clone(),
+            name: container_name,
             platform: None,
         });
 
         let config = Config {
             image: Some(docker_image.to_string()),
-            hostname: Some(container_name.clone()),
+            hostname: Some(container_name.to_string()),
             cmd: Some(vec![command]),
             ..Default::default()
         };
@@ -255,7 +269,7 @@ impl DockerConverter {
         Ok(())
     }
 
-    async fn pull_image(&self, docker: &Docker, docker_image: &String) -> Result<()> {
+    async fn pull_image(&self, docker: &Docker, docker_image: &str) -> Result<()> {
         log::debug!("pulling docker image {}", &docker_image);
 
         let options = Some(CreateImageOptions {
