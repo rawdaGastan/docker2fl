@@ -26,10 +26,10 @@ A store in where the actual data lives. A store can be as simple as a `directory
 ### Creating an `fl`
 
 ```bash
-docker2fl -m output.fl -s <store-specs> <directory>
+docker2fl -i redis -s <store-specs>
 ```
 
-This tells docker2fl to create an `fl` named `redis.fl` using the store defined by the url `<store-specs>` and upload all the files under the docker directory recursively.
+This tells docker2fl to create an `fl` named `redis-latest.fl` using the store defined by the url `<store-specs>` and upload all the files under the temp docker directory that include exported docker image recursively.
 
 The simplest form of `<store-specs>` is a `url`. the store `url` defines the store to use. Any `url` has a schema that defines the store type. Right now we have support only for:
 
@@ -52,8 +52,7 @@ The same range can appear multiple times, which means the blob will be replicate
 To quickly test this operation
 
 ```bash
-mkdir docker_temp
-docker2fl -i redis -d docker_temp -s "dir:///tmp/store0"
+docker2fl -i redis -s "dir:///tmp/store0"
 ```
 
 this command will use redis image and effectively create the `redis.fl` and store (and shard) the blobs across the location /tmp/store0.
@@ -61,7 +60,7 @@ this command will use redis image and effectively create the `redis.fl` and stor
 ```bash
 #docker2fl --help
 
-Usage: docker2fl [OPTIONS] --image-name <IMAGE_NAME> --docker-directory <DOCKER_DIRECTORY>
+Usage: docker2fl [OPTIONS] --image-name <IMAGE_NAME>
 Options:
       --debug...
           enable debugging logs
@@ -69,8 +68,6 @@ Options:
           name of the docker image to be converted to flist
   -s, --store <STORE>
           store url for rfs in the format [xx-xx=]<url>. the range xx-xx is optional and used for sharding. the URL is per store type, please check docs for more information
-  -d, --docker-directory <DOCKER_DIRECTORY>
-          docker directory to implement all docker work in it (exporting docker image and extracting it). this directory is used as the rfs target directory to upload
   -h, --help
           Print help
   -V, --version
