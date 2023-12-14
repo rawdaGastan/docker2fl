@@ -24,16 +24,16 @@ use uuid::Uuid;
 #[clap(name ="docker2fl", author, version = env!("GIT_VERSION"), about, long_about = None)]
 struct Options {
     /// enable debugging logs
-    #[clap(long, action=ArgAction::Count)]
+    #[clap(short, long, action=ArgAction::Count)]
     debug: u8,
 
     /// name of the docker image to be converted to flist
-    #[clap(short, long)]
+    #[clap(short, long, required = true)]
     image_name: String,
 
     /// store url for rfs in the format [xx-xx=]<url>. the range xx-xx is optional and used for
     /// sharding. the URL is per store type, please check docs for more information
-    #[clap(short, long, action=ArgAction::Append)]
+    #[clap(short, long, required = true, action=ArgAction::Append)]
     store: Vec<String>,
 }
 
@@ -81,10 +81,6 @@ pub async fn convert(store: &[String], image_name: &str) -> Result<()> {
         .await
         .context("failed to convert docker image to flist")?;
 
-    clean(&docker, image_name, &container_name)
-        .await
-        .context("failed to clean docker image and container")?;
-
     log::info!("flist '{}' has been created", flist_name);
     Ok(())
 }
@@ -124,6 +120,10 @@ async fn extract_image(
     container_boot(docker, container_name, docker_tmp_dir_path)
         .await
         .context("failed to boot docker container")?;
+		clean(docker, image_name, container_name)
+			.await
+			.context("failed to clean docker image and container")?;
+
     Ok(())
 }
 
