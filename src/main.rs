@@ -11,7 +11,7 @@ use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
 use std::default::Default;
-use std::fs::File;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -120,9 +120,9 @@ async fn extract_image(
     container_boot(docker, container_name, docker_tmp_dir_path)
         .await
         .context("failed to boot docker container")?;
-		clean(docker, image_name, container_name)
-			.await
-			.context("failed to clean docker image and container")?;
+    clean(docker, image_name, container_name)
+        .await
+        .context("failed to clean docker image and container")?;
 
     Ok(())
 }
@@ -266,15 +266,18 @@ async fn container_boot(
         }
     });
 
+    let toml_metadata: toml::Value = serde_json::from_str(&metadata.to_string())?;
+
     log::debug!(
         "Creating '.startup.toml' file from container {}",
         container_name
     );
-    serde_json::to_writer(
-        &File::create(docker_tmp_dir_path.join(".startup.toml"))?,
-        &metadata,
+
+    fs::write(
+        docker_tmp_dir_path.join(".startup.toml"),
+        toml_metadata.to_string(),
     )
-    .context("failed to create '.startup.toml' file")?;
+    .expect("failed to create '.startup.toml' file");
 
     Ok(())
 }
