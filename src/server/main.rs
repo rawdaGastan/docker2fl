@@ -12,8 +12,10 @@ use clap::{ArgAction, Parser};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
-use crate::config::parse_config;
-use crate::handler::{create_flist_handler, health_checker_handler};
+use crate::{
+    config::parse_config,
+    handler::{create_flist_handler, health_checker_handler},
+};
 
 #[derive(Parser, Debug)]
 #[clap(name ="fl-server", author, version = env!("GIT_VERSION"), about, long_about = None)]
@@ -73,7 +75,8 @@ async fn main() -> Result<()> {
         .context("failed to bind address")?;
 
     log::info!(
-        "🚀 Server started successfully at localhost:{}",
+        "🚀 Server started successfully at {}:{}",
+        config.host,
         config.port
     );
     axum::serve(listener, app)
