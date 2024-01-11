@@ -14,11 +14,35 @@ use std::default::Default;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use tokio_async_drop::tokio_async_drop;
 
 use rfs::fungi::Writer;
 use rfs::store::{self, Router, Store};
 
 use uuid::Uuid;
+
+struct DockerInfo {
+    image_name: String,
+    container_name: String,
+    docker: Docker,
+}
+
+impl Drop for DockerInfo {
+    fn drop(&mut self) {
+        tokio_async_drop!({
+            let res = clean(&self.docker, &self.image_name, &self.container_name)
+                .await
+                .context("failed to clean docker image and container");
+
+            if res.is_err() {
+                log::error!(
+                    "cleaning docker image and container failed with error: {:?}",
+                    res.err()
+                );
+            }
+        });
+    }
+}
 
 pub async fn convert<S: Store>(
     meta: Writer,
@@ -34,10 +58,16 @@ pub async fn convert<S: Store>(
     let docker_tmp_dir = tempdir::TempDir::new(&container_name)?;
     let docker_tmp_dir_path = docker_tmp_dir.path();
 
+    let docker_info = DockerInfo {
+        image_name: image_name.to_owned(),
+        container_name,
+        docker,
+    };
+
     extract_image(
-        &docker,
-        image_name,
-        &container_name,
+        &docker_info.docker,
+        &docker_info.image_name,
+        &docker_info.container_name,
         docker_tmp_dir_path,
         credentials,
     )
@@ -68,11 +98,6 @@ async fn extract_image(
     container_boot(docker, container_name, docker_tmp_dir_path)
         .await
         .context("failed to boot docker container")?;
-
-    // TODO: `drop` objects even I got errors
-    clean(docker, image_name, container_name)
-        .await
-        .context("failed to clean docker image and container")?;
 
     Ok(())
 }

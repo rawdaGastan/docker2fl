@@ -38,6 +38,7 @@ serde = { version = "1.0.159" , features = ["derive"] }
 axum = { version = "0.7.3" , features = ["macros"] }
 chrono = { version = "0.4", features = ["serde"] }
 tower-http = { version = "0.5.0", features = ["fs", "cors"] }
+tokio-async-drop = "0.1.0"
 
 [profile.release]
 lto = true
