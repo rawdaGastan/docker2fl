@@ -272,7 +272,7 @@ async fn clean(docker: &Docker, image_name: &str, container_name: &str) -> Resul
     docker
         .remove_container(container_name, options)
         .await
-        .context("failed to remove docker image")?;
+        .context("failed to remove docker container")?;
 
     let remove_options = Some(RemoveImageOptions {
         force: true,
@@ -282,7 +282,7 @@ async fn clean(docker: &Docker, image_name: &str, container_name: &str) -> Resul
     docker
         .remove_image(image_name, remove_options, None)
         .await
-        .context("failed to remove docker container")?;
+        .context("failed to remove docker image")?;
 
     Ok(())
 }

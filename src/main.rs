@@ -82,10 +82,17 @@ async fn main() -> Result<()> {
         registrytoken: opts.registry_token,
     });
 
-    let flist_name = opts.image_name.replace([':', '/'], "-") + ".fl";
-    let meta = fungi::Writer::new(flist_name).await?;
+    let fl_name = docker_image.replace([':', '/'], "-") + ".fl";
+    let meta = fungi::Writer::new(&fl_name).await?;
     let store = docker2fl::parse_router(&opts.store).await?;
 
-    docker2fl::convert(meta, store, &docker_image, credentials).await?;
+    let res = docker2fl::convert(meta, store, &docker_image, credentials).await;
+
+    // remove the file created with the writer if fl creation failed
+    if res.is_err(){
+        tokio::fs::remove_file(fl_name).await?;
+        return res;
+    }
+
     Ok(())
 }
