@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bollard::auth::DockerCredentials;
 use clap::{ArgAction, Parser};
+use rfs::fungi;
 
 mod docker2fl;
 
@@ -81,6 +82,10 @@ async fn main() -> Result<()> {
         registrytoken: opts.registry_token,
     });
 
-    docker2fl::convert(&opts.store, &docker_image, credentials).await?;
+    let flist_name = opts.image_name.replace([':', '/'], "-") + ".fl";
+    let meta = fungi::Writer::new(flist_name).await?;
+    let store = docker2fl::parse_router(&opts.store).await?;
+
+    docker2fl::convert(meta, store, &docker_image, credentials).await?;
     Ok(())
 }

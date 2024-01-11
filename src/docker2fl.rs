@@ -15,16 +15,17 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use rfs::fungi;
-use rfs::store::{self, Router};
+use rfs::fungi::Writer;
+use rfs::store::{self, Router, Store};
 
 use uuid::Uuid;
 
-pub async fn convert(
-    store: &[String],
+pub async fn convert<S: Store>(
+    meta: Writer,
+    store: S,
     image_name: &str,
     credentials: Option<DockerCredentials>,
-) -> Result<String> {
+) -> Result<()> {
     #[cfg(unix)]
     let docker = Docker::connect_with_socket_defaults().context("failed to create docker")?;
 
@@ -43,33 +44,11 @@ pub async fn convert(
     .await
     .context("failed to extract docker image to a directory")?;
 
-    let flist_name = image_name.replace([':', '/'], "-") + ".fl";
-
-    convert_to_fl(&flist_name, store, docker_tmp_dir_path)
-        .await
-        .context("failed to convert docker image to flist")?;
-
-    log::info!("flist '{}' has been created", flist_name);
-    Ok(flist_name)
-}
-
-async fn convert_to_fl(
-    flist_name: &str,
-    store_urls: &[String],
-    docker_tmp_dir_path: &Path,
-) -> Result<()> {
-    log::info!("using rfs to pack flist '{}'", flist_name);
-
-    let store = parse_router(store_urls)
-        .await
-        .context("failed to parse store urls")?;
-    let meta = fungi::Writer::new(flist_name)
-        .await
-        .context("failed to format flist metadata")?;
     rfs::pack(meta, store, docker_tmp_dir_path, true)
         .await
         .context("failed to pack flist")?;
 
+    log::info!("flist has been created successfully");
     Ok(())
 }
 
@@ -89,6 +68,8 @@ async fn extract_image(
     container_boot(docker, container_name, docker_tmp_dir_path)
         .await
         .context("failed to boot docker container")?;
+
+    // TODO: `drop` objects even I got errors
     clean(docker, image_name, container_name)
         .await
         .context("failed to clean docker image and container")?;
@@ -281,7 +262,7 @@ async fn clean(docker: &Docker, image_name: &str, container_name: &str) -> Resul
     Ok(())
 }
 
-async fn parse_router(urls: &[String]) -> Result<Router> {
+pub async fn parse_router(urls: &[String]) -> Result<Router> {
     let mut router = Router::new();
     let pattern = r"^(?P<range>[0-9a-f]{2}-[0-9a-f]{2})=(?P<url>.+)$";
     let re = Regex::new(pattern)?;
