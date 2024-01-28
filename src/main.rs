@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
     let res = docker2fl::convert(meta, store, &docker_image, credentials).await;
 
     // remove the file created with the writer if fl creation failed
-    if res.is_err(){
+    if res.is_err() {
         tokio::fs::remove_file(fl_name).await?;
         return res;
     }

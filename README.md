@@ -17,6 +17,10 @@ cargo build --release --target=x86_64-unknown-linux-musl
 the binary will be available under `./target/x86_64-unknown-linux-musl/release/docker2fl` you can copy that binary then to `/usr/bin/`
 to be able to use from anywhere on your system.
 
+```bash
+sudo mv ./target/x86_64-unknown-linux-musl/release/docker2fl /usr/bin/
+```
+
 ## Stores
 
 A store in where the actual data lives. A store can be as simple as a `directory` on your local machine in that case the files on the `fl` are only 'accessible' on your local machine. A store can also be a `zdb` running remotely or a cluster of `zdb`. Right now only `dir`, `zdb` and `s3` stores are supported but this will change in the future to support even more stores.
