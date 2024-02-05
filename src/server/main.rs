@@ -1,20 +1,24 @@
 mod config;
 mod handler;
 
-use anyhow::{Context, Result};
+use std::collections::HashMap;
 
+use anyhow::{Context, Result};
 use axum::{
     routing::{get, post},
-    Router,
+    Extension, Router,
 };
-
 use clap::{ArgAction, Parser};
+use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 use crate::{
-    config::parse_config,
-    handler::{create_flist_handler, health_checker_handler},
+    config::{parse_config, State},
+    handler::{
+        create_flist_handler, get_flist_state_handler, health_checker_handler, process_flist,
+        ConvertFlistRequirements,
+    },
 };
 
 #[derive(Parser, Debug)]
@@ -33,6 +37,15 @@ struct Options {
 async fn main() -> Result<()> {
     let opts = Options::parse();
     let config = parse_config(&opts.config_path).context("failed to parse config file")?;
+
+    let app_state = State {
+        config: config.clone(),
+        jobs_state: HashMap::new(),
+    };
+
+    // Create a channel to send requests to the processing task
+    //TODO:
+    let (sender, receiver) = mpsc::channel::<ConvertFlistRequirements>(100);
 
     simple_logger::SimpleLogger::new()
         .with_utc_timestamps()
@@ -53,21 +66,40 @@ async fn main() -> Result<()> {
     // .allow_credentials(true)
     // .allow_headers([AUTHORIZATION, ACCEPT, CONTENT_TYPE]);
 
+    // TODO: add pagination
     let app = Router::new()
         .route(
-            &format!("{}/api/flist", config.version),
-            get(health_checker_handler),
-        )
-        .route(
-            &format!("{}/api/flist", config.version),
+            &format!("/{}/api/fl", config.version),
             post(create_flist_handler),
         )
+        .route(
+            &format!("/{}/api/fl:job_id", config.version),
+            get(get_flist_state_handler),
+        )
+        .route(
+            &format!("/{}/api", config.version),
+            get(health_checker_handler),
+        )
+        // TODO: add username to the flist path
+        // .nest_service(
+        //     &format!("/{}/api/fl/:name", config.version),
+        //     get(get_flist_handler),
+        // )
         .nest_service(
-            &format!("/{}", config.flist_dir),
+            &format!("/{}/username", config.flist_dir),
             ServeDir::new(&config.flist_dir),
         )
-        .with_state(config.clone())
+        // .with_state(config)
+        .with_state(app_state.clone())
+        .layer(Extension(sender))
+        // .layer(Extension(config))
         .layer(cors);
+
+    // Spawn a task to do all the processing. Since this is a single
+    // task, all processing will be done sequentially.
+    // tokio::spawn(async move {
+    //     process_flist(receiver, app_state.clone()).await;
+    // });
 
     let address = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address)
@@ -80,6 +112,7 @@ async fn main() -> Result<()> {
         config.port
     );
     axum::serve(listener, app)
+        // .serve(app.into_make_service())
         .await
         .context("failed to serve listener")?;
 
