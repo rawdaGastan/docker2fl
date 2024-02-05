@@ -294,7 +294,7 @@ pub async fn parse_router(urls: &[String]) -> Result<Router> {
 
     for u in urls {
         let ((start, end), store) = match re.captures(u) {
-            None => ((0x00, 0xff), store::make(u).await?),
+            None => ((0x00, 0xff), store::make::<String>(u).await?),
             Some(captures) => {
                 let url = captures.name("url").context("missing url group")?.as_str();
                 let rng = captures
@@ -302,7 +302,7 @@ pub async fn parse_router(urls: &[String]) -> Result<Router> {
                     .context("missing range group")?
                     .as_str();
 
-                let store = store::make(url).await?;
+                let store = store::make::<&str>(url).await?;
                 let range = match rng.split_once('-') {
                     None => anyhow::bail!("invalid range format"),
                     Some((low, high)) => (
