@@ -15,6 +15,10 @@ path = "src/docker2fl.rs"
 name = "docker2fl"
 path = "src/main.rs"
 
+[[bin]]
+name = "fl-server"
+path = "src/server/main.rs"
+
 [dependencies]
 log = "0.4"
 anyhow = "1.0.44"
