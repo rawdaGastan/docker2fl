@@ -1,19 +1,21 @@
+use crate::handler::{ConvertFlistRequirements, FlistState};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs};
+use std::{collections::HashMap, fs, sync::Mutex};
+use tokio::sync;
 
-use crate::handler::FlistState;
+// pub type SharedState = Arc<RwLock<AppState>>;
 
-#[derive(Debug, Clone, Default, Serialize, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone, Serialize, Eq, Hash, PartialEq)]
 pub struct JobID(pub String);
 
-#[derive(Debug, Clone)]
-pub struct State {
-    pub config: Config,
-    pub jobs_state: HashMap<JobID, FlistState>,
+#[derive(Debug)]
+pub struct AppState {
+    pub sender: sync::mpsc::UnboundedSender<ConvertFlistRequirements>,
+    pub jobs_state: Mutex<HashMap<JobID, FlistState>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct Config {
     pub host: String,
     pub port: i16,
@@ -30,5 +32,6 @@ pub struct Config {
 pub fn parse_config(filepath: &str) -> Result<Config> {
     let content = fs::read_to_string(filepath).context("failed to read config file")?;
     let c: Config = toml::from_str(&content).context("failed to convert toml config data")?;
+    fs::create_dir_all(&c.flist_dir)?;
     Ok(c)
 }
