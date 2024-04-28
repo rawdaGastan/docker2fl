@@ -1,24 +1,29 @@
 mod config;
 mod handler;
 
-use std::collections::HashMap;
-
 use anyhow::{Context, Result};
 use axum::{
+    error_handling::HandleErrorLayer,
+    http::StatusCode,
+    response::IntoResponse,
     routing::{get, post},
-    Extension, Router,
+    BoxError, Router,
 };
 use clap::{ArgAction, Parser};
-use tokio::sync::mpsc;
-use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::signal;
+use tower::ServiceBuilder;
+use tower_http::{add_extension::AddExtensionLayer, cors::CorsLayer};
+use tower_http::{services::ServeDir, trace::TraceLayer};
 
-use crate::{
-    config::{parse_config, State},
-    handler::{
-        create_flist_handler, get_flist_state_handler, health_checker_handler, process_flist,
-        ConvertFlistRequirements,
-    },
+use crate::handler::{
+    create_flist_handler, get_flist_state_handler, health_checker_handler, process_flist,
+    ConvertFlistRequirements,
 };
 
 #[derive(Parser, Debug)]
@@ -36,16 +41,14 @@ struct Options {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts = Options::parse();
-    let config = parse_config(&opts.config_path).context("failed to parse config file")?;
+    let config = config::parse_config(&opts.config_path).context("failed to parse config file")?;
 
-    let app_state = State {
-        config: config.clone(),
-        jobs_state: HashMap::new(),
-    };
-
+    // Set up application state for use with with_state().
+    let jobs_state = Mutex::new(HashMap::new());
     // Create a channel to send requests to the processing task
-    //TODO:
-    let (sender, receiver) = mpsc::channel::<ConvertFlistRequirements>(100);
+    // let (sender, receiver) = mpsc::channel::<ConvertFlistRequirements>(100);
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<ConvertFlistRequirements>();
+    let app_state = Arc::new(config::AppState { jobs_state, sender });
 
     simple_logger::SimpleLogger::new()
         .with_utc_timestamps()
@@ -73,7 +76,7 @@ async fn main() -> Result<()> {
             post(create_flist_handler),
         )
         .route(
-            &format!("/{}/api/fl:job_id", config.version),
+            &format!("/{}/api/fl/:job_id", config.version),
             get(get_flist_state_handler),
         )
         .route(
@@ -89,17 +92,26 @@ async fn main() -> Result<()> {
             &format!("/{}/username", config.flist_dir),
             ServeDir::new(&config.flist_dir),
         )
-        // .with_state(config)
-        .with_state(app_state.clone())
-        .layer(Extension(sender))
-        // .layer(Extension(config))
+        // Add middleware to all routes
+        .layer(
+            ServiceBuilder::new()
+                // Handle errors from middleware
+                .layer(HandleErrorLayer::new(handle_error))
+                .load_shed()
+                .concurrency_limit(1024)
+                .timeout(Duration::from_secs(10))
+                .layer(TraceLayer::new_for_http()),
+        )
+        // .layer(Extension(sender))
+        .layer(AddExtensionLayer::new(config.clone()))
+        .with_state(Arc::clone(&app_state))
         .layer(cors);
 
     // Spawn a task to do all the processing. Since this is a single
     // task, all processing will be done sequentially.
-    // tokio::spawn(async move {
-    //     process_flist(receiver, app_state.clone()).await;
-    // });
+    tokio::spawn(async move {
+        process_flist(receiver, app_state).await;
+    });
 
     let address = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address)
@@ -111,10 +123,54 @@ async fn main() -> Result<()> {
         config.host,
         config.port
     );
+
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         // .serve(app.into_make_service())
         .await
         .context("failed to serve listener")?;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}
+
+async fn handle_error(error: BoxError) -> impl IntoResponse {
+    if error.is::<tower::timeout::error::Elapsed>() {
+        return (StatusCode::REQUEST_TIMEOUT, Cow::from("request timed out"));
+    }
+
+    if error.is::<tower::load_shed::error::Overloaded>() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Cow::from("service is overloaded, try again later"),
+        );
+    }
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Cow::from(format!("Unhandled internal error: {}", error)),
+    )
 }
