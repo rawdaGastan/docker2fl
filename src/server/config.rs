@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, sync::Mutex};
 use tokio::sync;
 
-// pub type SharedState = Arc<RwLock<AppState>>;
-
 #[derive(Debug, Clone, Serialize, Eq, Hash, PartialEq)]
 pub struct JobID(pub String);
 

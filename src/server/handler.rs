@@ -1,7 +1,10 @@
-use std::collections::HashMap;
+use std::{fs, sync::Arc};
 
 use axum::{
-    debug_handler, extract::Path, extract::State, http::StatusCode, response::IntoResponse,
+    debug_handler,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
     Extension, Json,
 };
 use bollard::auth::DockerCredentials;
@@ -57,10 +60,10 @@ pub async fn health_checker_handler() -> impl IntoResponse {
 
 #[debug_handler]
 pub async fn create_flist_handler(
-    Extension(sender): Extension<mpsc::Sender<ConvertFlistRequirements>>,
-    State(mut app): State<config::State>,
+    State(state): State<Arc<config::AppState>>,
+    Extension(config): Extension<config::Config>,
     Json(body): Json<FlistInputs>,
-) -> impl IntoResponse {
+) -> Result<String, StatusCode> {
     let credentials = Some(DockerCredentials {
         username: body.username,
         password: body.password,
@@ -78,7 +81,18 @@ pub async fn create_flist_handler(
 
     let fl_name = docker_image.replace([':', '/'], "-") + ".fl";
     // TODO: username
-    let fl_path = format!("{}/{}/{}", app.config.flist_dir, "username", fl_name);
+    let username_dir = format!("{}/{}", config.flist_dir, "username");
+    let created = fs::create_dir_all(&username_dir);
+    if created.is_err() {
+        log::error!(
+            "failed to create user flist directory `{}` with error {:?}",
+            &username_dir,
+            created.err()
+        );
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let fl_path: String = format!("{}/{}", username_dir, fl_name);
 
     let meta = match Writer::new(&fl_path).await {
         Ok(writer) => writer,
@@ -88,27 +102,15 @@ pub async fn create_flist_handler(
                 fl_path,
                 err
             );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "status": "failed",
-                    "message": "internal server error",
-                })),
-            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
 
-    let store = match docker2fl::parse_router(&app.config.store_url).await {
+    let store = match docker2fl::parse_router(&config.store_url).await {
         Ok(s) => s,
         Err(err) => {
             log::error!("failed to parse router for store with error {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "status": "failed",
-                    "message": "internal server error",
-                })),
-            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
 
@@ -125,32 +127,30 @@ pub async fn create_flist_handler(
     };
 
     // Send our request to the processing task
-    let res = sender.send(requirements).await;
+    let res = state.sender.send(requirements);
     if res.is_err() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "status": "failed",
-                "message": format!("Failed to send flist inputs: {:?}", res.err()),
-            })),
-        );
+        return Err(StatusCode::BAD_REQUEST);
     }
 
-    app.jobs_state.insert(job_id.clone(), FlistState::Accepted);
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({
-            "status": "success",
-            "job_id": job_id,
-        })),
-    )
+    state
+        .jobs_state
+        .lock()
+        .unwrap()
+        .insert(job_id.clone(), FlistState::Accepted);
+
+    Ok(job_id.0)
 }
 
 pub async fn get_flist_state_handler(
     Path(flist_job_id): Path<String>,
-    State(app): State<config::State>,
+    State(state): State<Arc<config::AppState>>,
 ) -> impl IntoResponse {
-    if !app.jobs_state.contains_key(&JobID(flist_job_id.clone())) {
+    if !&state
+        .jobs_state
+        .lock()
+        .unwrap()
+        .contains_key(&JobID(flist_job_id.clone()))
+    {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -164,7 +164,7 @@ pub async fn get_flist_state_handler(
         StatusCode::OK,
         Json(serde_json::json!({
             "status": "success",
-            "job_state": app.jobs_state.get(&JobID(flist_job_id.clone())),
+            "job_state": &state.jobs_state.lock().unwrap().get(&JobID(flist_job_id.clone())),
         })),
     )
 }
@@ -178,30 +178,39 @@ pub async fn get_flist_state_handler(
 // }
 
 pub async fn process_flist(
-    mut receiver: mpsc::Receiver<ConvertFlistRequirements>,
-    mut app: config::State,
+    mut receiver: mpsc::UnboundedReceiver<ConvertFlistRequirements>,
+    state: Arc<config::AppState>,
 ) {
     while let Some(requirements) = receiver.recv().await {
-        app.jobs_state
+        state
+            .jobs_state
+            .lock()
+            .unwrap()
             .insert(requirements.job_id.clone(), FlistState::Started);
 
-        let res = docker2fl::convert(
-            requirements.writer,
-            requirements.store,
-            &requirements.docker_image,
-            requirements.docker_credentials,
-        )
-        .await;
+        // let res = docker2fl::convert(
+        //     requirements.writer,
+        //     requirements.store,
+        //     &requirements.docker_image,
+        //     requirements.docker_credentials,
+        // )
+        // .await;
 
-        // remove the file created with the writer if fl creation failed
-        if res.is_err() {
-            let _ = tokio::fs::remove_file(requirements.fl_path).await;
-            app.jobs_state
-                .insert(requirements.job_id.clone(), FlistState::Failed);
-            continue;
-        }
+        // // remove the file created with the writer if fl creation failed
+        // if res.is_err() {
+        //     let _ = tokio::fs::remove_file(requirements.fl_path).await;
+        //     state
+        //         .jobs_state
+        //         .lock()
+        //         .unwrap()
+        //         .insert(requirements.job_id.clone(), FlistState::Failed);
+        //     continue;
+        // }
 
-        app.jobs_state
+        state
+            .jobs_state
+            .lock()
+            .unwrap()
             .insert(requirements.job_id, FlistState::Created);
     }
 }
