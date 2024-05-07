@@ -1,15 +1,14 @@
-use crate::handler::{ConvertFlistRequirements, FlistState};
+use crate::handler::FlistState;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, sync::Mutex};
-use tokio::sync;
 
 #[derive(Debug, Clone, Serialize, Eq, Hash, PartialEq)]
 pub struct JobID(pub String);
 
+// add configs
 #[derive(Debug)]
 pub struct AppState {
-    pub sender: sync::mpsc::UnboundedSender<ConvertFlistRequirements>,
     pub jobs_state: Mutex<HashMap<JobID, FlistState>>,
 }
 

@@ -9,15 +9,12 @@ use axum::{
 };
 use bollard::auth::DockerCredentials;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 use rfs::fungi::Writer;
-use rfs::store::Router;
 use uuid::Uuid;
 
 use crate::config::{self, JobID};
 
-#[allow(non_snake_case)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FlistInputs {
     pub image_name: String,
@@ -30,17 +27,7 @@ pub struct FlistInputs {
     pub registry_token: Option<String>,
 }
 
-pub struct ConvertFlistRequirements {
-    job_id: JobID,
-    writer: Writer,
-    store: Router,
-    docker_image: String,
-    fl_path: String,
-    docker_credentials: Option<DockerCredentials>,
-}
-
 #[derive(Debug, Clone, Serialize)]
-
 pub enum FlistState {
     Accepted,
     Started,
@@ -116,27 +103,39 @@ pub async fn create_flist_handler(
 
     // Create a new job id for the flist request
     let job_id = JobID(Uuid::new_v4().to_string());
-
-    let requirements = ConvertFlistRequirements {
-        job_id: job_id.clone(),
-        writer: meta,
-        store,
-        docker_image,
-        fl_path,
-        docker_credentials: credentials,
-    };
-
-    // Send our request to the processing task
-    let res = state.sender.send(requirements);
-    if res.is_err() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+		let cloned_job_id = job_id.clone();
 
     state
         .jobs_state
         .lock()
         .unwrap()
-        .insert(job_id.clone(), FlistState::Accepted);
+        .insert(cloned_job_id.clone(), FlistState::Accepted);
+
+    tokio::spawn(async move {
+        state
+            .jobs_state
+            .lock()
+            .unwrap()
+            .insert(cloned_job_id.clone(), FlistState::Started);
+
+        let res = docker2fl::convert(meta, store, &docker_image, credentials).await;
+
+        // remove the file created with the writer if fl creation failed
+        if res.is_err() {
+            let _ = tokio::fs::remove_file(&fl_path).await;
+            state
+                .jobs_state
+                .lock()
+                .unwrap()
+                .insert(cloned_job_id.clone(), FlistState::Failed);
+        }
+
+        state
+            .jobs_state
+            .lock()
+            .unwrap()
+            .insert(cloned_job_id.clone(), FlistState::Created);
+    });
 
     Ok(job_id.0)
 }
@@ -160,6 +159,7 @@ pub async fn get_flist_state_handler(
         );
     }
 
+    // TODO: clean of done or error
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -176,41 +176,3 @@ pub async fn get_flist_state_handler(
 //     // TODO: username
 //     ServeFile::new(format!("/{}/{}/{}", config.flist_dir, "username", flist_name));
 // }
-
-pub async fn process_flist(
-    mut receiver: mpsc::UnboundedReceiver<ConvertFlistRequirements>,
-    state: Arc<config::AppState>,
-) {
-    while let Some(requirements) = receiver.recv().await {
-        state
-            .jobs_state
-            .lock()
-            .unwrap()
-            .insert(requirements.job_id.clone(), FlistState::Started);
-
-        let res = docker2fl::convert(
-            requirements.writer,
-            requirements.store,
-            &requirements.docker_image,
-            requirements.docker_credentials,
-        )
-        .await;
-
-        // // remove the file created with the writer if fl creation failed
-        // if res.is_err() {
-        //     let _ = tokio::fs::remove_file(requirements.fl_path).await;
-        //     state
-        //         .jobs_state
-        //         .lock()
-        //         .unwrap()
-        //         .insert(requirements.job_id.clone(), FlistState::Failed);
-        //     continue;
-        // }
-
-        state
-            .jobs_state
-            .lock()
-            .unwrap()
-            .insert(requirements.job_id, FlistState::Created);
-    }
-}

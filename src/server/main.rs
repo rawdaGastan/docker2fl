@@ -21,10 +21,7 @@ use tower::ServiceBuilder;
 use tower_http::{add_extension::AddExtensionLayer, cors::CorsLayer};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 
-use crate::handler::{
-    create_flist_handler, get_flist_state_handler, health_checker_handler, process_flist,
-    ConvertFlistRequirements,
-};
+use crate::handler::{create_flist_handler, get_flist_state_handler, health_checker_handler};
 
 #[derive(Parser, Debug)]
 #[clap(name ="fl-server", author, version = env!("GIT_VERSION"), about, long_about = None)]
@@ -45,10 +42,7 @@ async fn main() -> Result<()> {
 
     // Set up application state for use with with_state().
     let jobs_state = Mutex::new(HashMap::new());
-    // Create a channel to send requests to the processing task
-    // let (sender, receiver) = mpsc::channel::<ConvertFlistRequirements>(100);
-    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<ConvertFlistRequirements>();
-    let app_state = Arc::new(config::AppState { jobs_state, sender });
+    let app_state = Arc::new(config::AppState { jobs_state });
 
     simple_logger::SimpleLogger::new()
         .with_utc_timestamps()
@@ -106,12 +100,6 @@ async fn main() -> Result<()> {
         .layer(AddExtensionLayer::new(config.clone()))
         .with_state(Arc::clone(&app_state))
         .layer(cors);
-
-    // Spawn a task to do all the processing. Since this is a single
-    // task, all processing will be done sequentially.
-    tokio::spawn(async move {
-        process_flist(receiver, app_state).await;
-    });
 
     let address = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address)
