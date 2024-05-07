@@ -188,13 +188,13 @@ pub async fn process_flist(
             .unwrap()
             .insert(requirements.job_id.clone(), FlistState::Started);
 
-        // let res = docker2fl::convert(
-        //     requirements.writer,
-        //     requirements.store,
-        //     &requirements.docker_image,
-        //     requirements.docker_credentials,
-        // )
-        // .await;
+        let res = docker2fl::convert(
+            requirements.writer,
+            requirements.store,
+            &requirements.docker_image,
+            requirements.docker_credentials,
+        )
+        .await;
 
         // // remove the file created with the writer if fl creation failed
         // if res.is_err() {
