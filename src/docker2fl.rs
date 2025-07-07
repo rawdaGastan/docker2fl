@@ -294,7 +294,7 @@ pub async fn parse_router(urls: &[String]) -> Result<Router> {
 
     for u in urls {
         let ((start, end), store) = match re.captures(u) {
-            None => ((0x00, 0xff), store::make::<String>(u).await?),
+            None => ((0x00, 0xff), store::make(u).await?),
             Some(captures) => {
                 let url = captures.name("url").context("missing url group")?.as_str();
                 let rng = captures
